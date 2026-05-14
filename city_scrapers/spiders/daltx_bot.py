@@ -1,44 +1,18 @@
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime
 from city_scrapers_core.constants import BOARD
 from city_scrapers_core.items import Meeting
 from city_scrapers_core.spiders import CityScrapersSpider
 from dateutil.parser import parse as date_parser
-import scrapy
 
 
 class DaltxBotSpider(CityScrapersSpider):
     name = "daltx_bot"
     agency = "Dallas College Board of Trustees"
     timezone = "America/Chicago"
-    start_url = "https://www.dallascollege.edu/events/?categories%5B%5D=Category%3EBoard%20of%20Trustees&search=all"
-
-    tz=ZoneInfo(timezone)
-
-    videos_endpoint = "https://mediaportal.dallascollege.edu/api/v1.0/media?Count=190&Offset=0&Type=Video&Privacy=Public&Edate={end_date}&Bdate={start_date}"
-    video_attachment_url = "https://mediaportal.dallascollege.edu/media/{video_id}/"
-
-    def start_requests(self):
-        start_date = datetime.now(tz=self.tz) - timedelta(days=365 * 3)
-        end_date = datetime.now(tz=self.tz) + timedelta(days=365)
-        
-        yield scrapy.Request(
-            self.videos_endpoint.format(start_date=start_date.strftime("%Y-%m-%d"), end_date=end_date.strftime("%Y-%m-%d")
-            ),
-            callback=self.request_videos
-        )
-
-    def request_videos(self, response):
-        video_data = response.json()
-        yield scrapy.Request(
-            url = self.start_url,
-            meta = {"videos_meta": video_data},
-            callback=self.parse
-        )
+    start_urls = ["https://www.dallascollege.edu/events/?categories%5B%5D=Category%3EBoard%20of%20Trustees&search=all"]
 
     def parse(self, response):
         records = response.css(".row.calendar-search-results")
-        video_items = response.meta.get("videos_meta", {}).get("items", [])
 
         for item in records:
             detail_url = item.css("h4.cal-header a::attr(href)").get()
@@ -46,13 +20,11 @@ class DaltxBotSpider(CityScrapersSpider):
             yield response.follow(
                 url=response.urljoin(detail_url),
                 callback=self._construct_meeting,
-                meta={"video_items": video_items, "item": item}
+                meta={"item": item}
             )
 
     def _construct_meeting(self, response):
         item = response.meta["item"]
-        # print(f"Processing meeting:", item)
-        # print(f"Response item:", response.text)
 
         start, end, all_day = self._parse_datetime(item)
         location, time_notes= self._parse_location(response, all_day)
@@ -67,7 +39,6 @@ class DaltxBotSpider(CityScrapersSpider):
             location=location,
             links=self._parse_links(response),
             source=response.url,
-
         )
 
         meeting["status"] = self._get_status(meeting)
@@ -116,5 +87,13 @@ class DaltxBotSpider(CityScrapersSpider):
                 "name": "",
             }, ""
 
-    def _parse_links(self, item):
-        return [{"href": "", "title": ""}]
+    def _parse_links(self, response):
+        # getting pdf links from the page pdf = "https/www.events.com/test.PDF"
+        pdf_links = response.css("a[href*='.pdf']")
+        links = []
+        for link in pdf_links:
+            href = link.css("::attr(href)").get()
+            title = link.css("::text").get()
+            if href and title:
+                links.append({"href": response.urljoin(href), "title": title.strip()})
+        return links
